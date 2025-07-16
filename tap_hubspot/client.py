@@ -111,7 +111,7 @@ class HubspotStream(RESTStream):
             A dictionary of URL query parameters.
         """
         params: dict = {}
-        params["limit"] = 100
+        params["limit"] = 200
         if next_page_token:
             params["after"] = next_page_token
         if self.replication_key:
@@ -186,6 +186,9 @@ class DynamicIncrementalHubspotStream(DynamicHubspotStream):
     def __init__(self, *args: t.Any, **kwargs: t.Any) -> None:  # noqa: D107
         super().__init__(*args, **kwargs)
 
+    # Records are sorted by replication key via HubSpot Search API sorting
+    is_sorted = True
+
     def _is_incremental_search(self, context: Context | None) -> bool:
         return (
             self.replication_method == REPLICATION_INCREMENTAL  # type: ignore[return-value]
@@ -259,8 +262,31 @@ class DynamicIncrementalHubspotStream(DynamicHubspotStream):
         if self.replication_key:
             val = None
             if props := row.get("properties"):
-                val = props[self.replication_key]
-            row[self.replication_key] = val
+                # Try to get the replication key value from properties
+                val = props.get(self.replication_key)
+                
+                # If not found, try common fallback fields
+                if val is None:
+                    val = (
+                        props.get("hs_lastmodifieddate")
+                        or props.get("lastmodifieddate") 
+                        or props.get("updatedAt")
+                    )
+            
+            # If still not found, try top-level fields
+            if val is None:
+                val = row.get("updatedAt") or row.get("createdAt")
+            
+            # Set the replication key value
+            if val is not None:
+                row[self.replication_key] = val
+            else:
+                # Log warning and skip record if no replication key value found
+                self.logger.warning(
+                    f"No replication key value found for record {row.get('id', 'unknown')}, skipping"
+                )
+                return None
+                
         return row
 
     def prepare_request(  # noqa: D102
@@ -303,12 +329,13 @@ class DynamicIncrementalHubspotStream(DynamicHubspotStream):
                     # Hubspot wont return more than 10k records so when we hit 10k we
                     # need to reset our epoch to most recent and not send the
                     # next_page_token
-                    if int(next_page_token) + 100 >= 10000:  # noqa: PLR2004
-                        ts = strptime_to_utc(
-                            self.get_context_state(context)  # type: ignore[union-attr]
-                            .get("progress_markers")
-                            .get("replication_key_value"),
-                        )
+                    if int(next_page_token) + 200 >= 10000:  # noqa: PLR2004
+                        context_state = self.get_context_state(context)
+                        if context_state and context_state.get("progress_markers"):
+                            replication_value = context_state.get("progress_markers", {}).get("replication_key_value")
+                            if replication_value:
+                                ts = strptime_to_utc(replication_value)
+                        # If no valid state, keep the original ts value
                     else:
                         body["after"] = next_page_token
                 epoch_ts = str(int(ts.timestamp() * 1000))
@@ -335,8 +362,8 @@ class DynamicIncrementalHubspotStream(DynamicHubspotStream):
                                 "direction": "ASCENDING",
                             },
                         ],
-                        # Hubspot sets a limit of most 100 per request. Default is 10
-                        "limit": 100,
+                        # Hubspot sets a limit of most 200 per request. Default is 10
+                        "limit": 200,
                         "properties": list(self.hs_properties),
                     },
                 )
@@ -344,14 +371,30 @@ class DynamicIncrementalHubspotStream(DynamicHubspotStream):
                 # If we're using POST but not incremental search, provide a basic search body
                 # This handles the case where the stream is configured for search but doesn't
                 # meet all incremental conditions
-                body.update(
-                    {
-                        "limit": 100,
-                        "properties": list(self.hs_properties)
-                        if hasattr(self, "hs_properties") and self.hs_properties
-                        else [],
-                    }
-                )
+                search_config = {
+                    "limit": 200,
+                    "properties": list(self.hs_properties)
+                    if hasattr(self, "hs_properties") and self.hs_properties
+                    else [],
+                }
+                
+                # Add sort for resumability - prefer replication key if available, otherwise sort by id
+                if self.replication_key:
+                    search_config["sorts"] = [
+                        {
+                            "propertyName": self.replication_key,
+                            "direction": "ASCENDING",
+                        }
+                    ]
+                else:
+                    search_config["sorts"] = [
+                        {
+                            "propertyName": "id",
+                            "direction": "ASCENDING",
+                        }
+                    ]
+                
+                body.update(search_config)
 
                 # Add pagination if needed
                 if next_page_token:

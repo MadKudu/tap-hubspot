@@ -48,6 +48,7 @@ class ContactStream(DynamicIncrementalHubspotStream):
     replication_key = "lastmodifieddate"
     replication_method = "INCREMENTAL"
     records_jsonpath = "$[results][*]"  # Or override `parse_response`.
+    is_sorted = True  # Records are sorted by replication key via HubSpot Search API
 
     @property
     def url_base(self) -> str:
@@ -1246,6 +1247,7 @@ class CompanyStream(DynamicIncrementalHubspotStream):
     replication_key = "hs_lastmodifieddate"
     replication_method = "INCREMENTAL"
     records_jsonpath = "$[results][*]"  # Or override `parse_response`.
+    is_sorted = True  # Records are sorted by replication key via HubSpot Search API
 
     @property
     def url_base(self) -> str:
@@ -1272,6 +1274,7 @@ class DealStream(DynamicIncrementalHubspotStream):
     replication_key = "hs_lastmodifieddate"
     replication_method = "INCREMENTAL"
     records_jsonpath = "$[results][*]"  # Or override `parse_response`.
+    is_sorted = True  # Records are sorted by replication key via HubSpot Search API
 
     @property
     def url_base(self) -> str:
@@ -1517,6 +1520,7 @@ class LineItemStream(DynamicIncrementalHubspotStream):
     replication_key = "hs_lastmodifieddate"
     replication_method = "INCREMENTAL"
     records_jsonpath = "$[results][*]"  # Or override `parse_response`.
+    is_sorted = True  # Records are sorted by replication key via HubSpot Search API
 
     @property
     def url_base(self) -> str:
@@ -1669,6 +1673,7 @@ class GoalStream(DynamicIncrementalHubspotStream):
     replication_key = "hs_lastmodifieddate"
     replication_method = "INCREMENTAL"
     records_jsonpath = "$[results][*]"  # Or override `parse_response`.
+    is_sorted = True  # Records are sorted by replication key via HubSpot Search API
 
     @property
     def url_base(self) -> str:
@@ -1694,6 +1699,7 @@ class CallStream(DynamicIncrementalHubspotStream):
     replication_key = "hs_lastmodifieddate"
     replication_method = "INCREMENTAL"
     records_jsonpath = "$[results][*]"  # Or override `parse_response`.
+    is_sorted = True  # Records are sorted by replication key via HubSpot Search API
 
     @property
     def url_base(self) -> str:
@@ -1719,6 +1725,7 @@ class CommunicationStream(DynamicIncrementalHubspotStream):
     replication_key = "hs_lastmodifieddate"
     replication_method = "INCREMENTAL"
     records_jsonpath = "$[results][*]"  # Or override `parse_response`.
+    is_sorted = True  # Records are sorted by replication key via HubSpot Search API
 
     @property
     def url_base(self) -> str:
@@ -1735,6 +1742,7 @@ class EmailStream(DynamicIncrementalHubspotStream):
     primary_keys = ("id",)
     replication_key = "hs_lastmodifieddate"
     records_jsonpath = "$[results][*]"  # Or override `parse_response`.
+    is_sorted = True  # Records are sorted by replication key via HubSpot Search API
 
     @property
     def url_base(self) -> str:
@@ -1760,6 +1768,7 @@ class MeetingStream(DynamicIncrementalHubspotStream):
     replication_key = "hs_lastmodifieddate"
     replication_method = "INCREMENTAL"
     records_jsonpath = "$[results][*]"  # Or override `parse_response`.
+    is_sorted = True  # Records are sorted by replication key via HubSpot Search API
 
     @property
     def url_base(self) -> str:
@@ -1785,6 +1794,7 @@ class NoteStream(DynamicIncrementalHubspotStream):
     replication_key = "hs_lastmodifieddate"
     replication_method = "INCREMENTAL"
     records_jsonpath = "$[results][*]"  # Or override `parse_response`.
+    is_sorted = True  # Records are sorted by replication key via HubSpot Search API
 
     @property
     def url_base(self) -> str:
@@ -1810,6 +1820,7 @@ class PostalMailStream(DynamicIncrementalHubspotStream):
     replication_key = "hs_lastmodifieddate"
     replication_method = "INCREMENTAL"
     records_jsonpath = "$[results][*]"  # Or override `parse_response`.
+    is_sorted = True  # Records are sorted by replication key via HubSpot Search API
 
     @property
     def url_base(self) -> str:
@@ -1835,6 +1846,7 @@ class TaskStream(DynamicIncrementalHubspotStream):
     replication_key = "hs_lastmodifieddate"
     replication_method = "INCREMENTAL"
     records_jsonpath = "$[results][*]"  # Or override `parse_response`.
+    is_sorted = True  # Records are sorted by replication key via HubSpot Search API
 
     @property
     def url_base(self) -> str:
@@ -1855,6 +1867,7 @@ class EmailEventsStream(HubspotStream):
     replication_key = "created"
     replication_method = "INCREMENTAL"
     records_jsonpath = "$[events][*]"
+    is_sorted = True  # Records are sorted by created timestamp
 
     schema = PropertiesList(
         Property("id", StringType),
@@ -2112,6 +2125,7 @@ class WebEventsStream(HubspotStream):
     replication_key = "occurredAt"
     replication_method = "INCREMENTAL"
     records_jsonpath = "$[results][*]"
+    is_sorted = True  # Records are sorted by occurredAt timestamp
 
     schema = PropertiesList(
         Property("id", StringType),
