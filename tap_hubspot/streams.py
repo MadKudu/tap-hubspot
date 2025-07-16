@@ -68,34 +68,34 @@ class ContactStream(DynamicIncrementalHubspotStream):
     ) -> dict | None:
         """Override to handle replication key extraction properly for full table replication."""
         # Call parent post_process first
-        row = super().post_process(row, context)
-        if row is None:
+        processed_row = super().post_process(row, context)
+        if processed_row is None:
             return None
 
         # Ensure replication key has a valid value for state management
-        if self.replication_key and self.replication_key in row:
-            replication_value = row.get(self.replication_key)
+        if self.replication_key and self.replication_key in processed_row:
+            replication_value = processed_row.get(self.replication_key)
             # If replication key is None/null, try to use updatedAt as fallback
             if replication_value is None:
-                if props := row.get("properties"):
+                if props := processed_row.get("properties"):
                     # Try alternative timestamp fields
                     replication_value = (
                         props.get("lastmodifieddate")
                         or props.get("hs_lastmodifieddate")
-                        or row.get("updatedAt")
+                        or processed_row.get("updatedAt")
                     )
                     if replication_value:
-                        row[self.replication_key] = replication_value
+                        processed_row[self.replication_key] = replication_value
                     else:
                         # If still no replication value found, use createdAt or updatedAt from top level
-                        fallback_value = row.get("updatedAt") or row.get("createdAt")
+                        fallback_value = processed_row.get("updatedAt") or processed_row.get("createdAt")
                         if fallback_value:
-                            row[self.replication_key] = fallback_value
+                            processed_row[self.replication_key] = fallback_value
                         else:
                             # As last resort, skip the record to avoid None replication key
                             return None
 
-        return row
+        return processed_row
 
 
 class UsersStream(HubspotStream):
@@ -2066,8 +2066,12 @@ class EmailEventsStream(HubspotStream):
         if isinstance(latest_value, int) and isinstance(previous_max, int):
             return latest_value >= previous_max
 
-        # Fallback to parent implementation
-        return super().compare_replication_key_value(latest_record, previous_max)
+        # For non-integer values, fall back to string comparison
+        if latest_value is not None and previous_max is not None:
+            return str(latest_value) >= str(previous_max)
+        
+        # If either value is None, consider the latest value as newer
+        return latest_value is not None
 
     def post_process(
         self,

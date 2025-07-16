@@ -277,8 +277,9 @@ class DynamicIncrementalHubspotStream(DynamicHubspotStream):
             if val is None:
                 val = row.get("updatedAt") or row.get("createdAt")
             
-            # Set the replication key value
+            # Normalize timestamp format to ensure consistent comparison
             if val is not None:
+                val = self._normalize_timestamp(val)
                 row[self.replication_key] = val
             else:
                 # Log warning and skip record if no replication key value found
@@ -288,6 +289,63 @@ class DynamicIncrementalHubspotStream(DynamicHubspotStream):
                 return None
                 
         return row
+
+    def _normalize_timestamp(self, timestamp_value) -> str:
+        """Normalize timestamp to consistent ISO format with milliseconds.
+        
+        Args:
+            timestamp_value: Timestamp value (string, int, or other)
+            
+        Returns:
+            Normalized timestamp string in ISO format with milliseconds
+        """
+        import datetime
+        
+        if isinstance(timestamp_value, int):
+            # Convert millisecond timestamp to datetime
+            dt = datetime.datetime.fromtimestamp(timestamp_value / 1000, tz=datetime.timezone.utc)
+            return dt.isoformat().replace('+00:00', 'Z')
+        
+        if isinstance(timestamp_value, str):
+            try:
+                # Parse the timestamp string and normalize format
+                if timestamp_value.endswith('Z'):
+                    # Remove Z and parse as UTC
+                    timestamp_str = timestamp_value[:-1]
+                    dt = datetime.datetime.fromisoformat(timestamp_str).replace(tzinfo=datetime.timezone.utc)
+                else:
+                    # Parse with timezone info
+                    dt = datetime.datetime.fromisoformat(timestamp_value.replace('Z', '+00:00'))
+                
+                # Ensure we have microseconds for consistent formatting
+                if dt.microsecond == 0:
+                    dt = dt.replace(microsecond=0)
+                
+                # Format consistently with 3 decimal places (milliseconds)
+                iso_str = dt.isoformat()
+                if '.' not in iso_str:
+                    # Add .000 if no microseconds
+                    iso_str = iso_str.replace('+00:00', '.000+00:00')
+                else:
+                    # Truncate to 3 decimal places (milliseconds)
+                    parts = iso_str.split('.')
+                    if len(parts) == 2:
+                        decimal_part = parts[1]
+                        if '+' in decimal_part:
+                            microseconds, tz = decimal_part.split('+')
+                            microseconds = microseconds[:3].ljust(3, '0')  # Ensure 3 digits
+                            iso_str = f"{parts[0]}.{microseconds}+{tz}"
+                        else:
+                            microseconds = decimal_part[:3].ljust(3, '0')  # Ensure 3 digits  
+                            iso_str = f"{parts[0]}.{microseconds}+00:00"
+                
+                return iso_str.replace('+00:00', 'Z')
+            except (ValueError, AttributeError):
+                # If parsing fails, return as string
+                return str(timestamp_value)
+        
+        # For other types, convert to string
+        return str(timestamp_value)
 
     def prepare_request(  # noqa: D102
         self,
