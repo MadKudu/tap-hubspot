@@ -111,7 +111,7 @@ class HubspotStream(RESTStream):
             A dictionary of URL query parameters.
         """
         params: dict = {}
-        params["limit"] = 100
+        params["limit"] = 1000
         if next_page_token:
             params["after"] = next_page_token
         if self.replication_key:
@@ -182,6 +182,7 @@ class DynamicHubspotStream(HubspotStream):
 
 class DynamicIncrementalHubspotStream(DynamicHubspotStream):
     """DynamicIncrementalHubspotStream."""
+    page_size = 200
 
     def __init__(self, *args: t.Any, **kwargs: t.Any) -> None:  # noqa: D107
         super().__init__(*args, **kwargs)
@@ -303,7 +304,7 @@ class DynamicIncrementalHubspotStream(DynamicHubspotStream):
                     # Hubspot wont return more than 10k records so when we hit 10k we
                     # need to reset our epoch to most recent and not send the
                     # next_page_token
-                    if int(next_page_token) + 100 >= 10000:  # noqa: PLR2004
+                    if int(next_page_token) + self.page_size >= 10000:  # noqa: PLR2004
                         ts = strptime_to_utc(
                             self.get_context_state(context)  # type: ignore[union-attr]
                             .get("progress_markers")
@@ -335,8 +336,7 @@ class DynamicIncrementalHubspotStream(DynamicHubspotStream):
                                 "direction": "ASCENDING",
                             },
                         ],
-                        # Hubspot sets a limit of most 100 per request. Default is 10
-                        "limit": 100,
+                        "limit": self.page_size,
                         "properties": list(self.hs_properties),
                     },
                 )
@@ -346,7 +346,7 @@ class DynamicIncrementalHubspotStream(DynamicHubspotStream):
                 # meet all incremental conditions
                 body.update(
                     {
-                        "limit": 100,
+                        "limit": self.page_size,
                         "properties": list(self.hs_properties)
                         if hasattr(self, "hs_properties") and self.hs_properties
                         else [],
