@@ -29,6 +29,47 @@ IntegerType = th.IntegerType
 NumberType = th.NumberType
 
 
+def extract_replication_key_value(row: dict, replication_key: str, logger=None) -> str | None:
+    """Extract and validate replication key value from a record.
+    
+    Args:
+        row: The record dictionary
+        replication_key: The name of the replication key field
+        logger: Optional logger for warnings
+        
+    Returns:
+        Valid replication key value or None if not found
+    """
+    if not replication_key:
+        return None
+        
+    # Try to get the value from the replication key field
+    val = row.get(replication_key)
+    
+    # If not found or None, try properties object
+    if val is None:
+        props = row.get("properties")
+        if props:
+            val = (
+                props.get(replication_key)
+                or props.get("hs_lastmodifieddate")
+                or props.get("lastmodifieddate")
+                or props.get("updatedAt")
+            )
+    
+    # If still None, try top-level timestamp fields
+    if val is None:
+        val = row.get("updatedAt") or row.get("createdAt")
+    
+    # Log warning if no valid value found
+    if val is None and logger:
+        logger.warning(
+            f"No valid replication key value found for record {row.get('id', 'unknown')}"
+        )
+    
+    return val
+
+
 class ContactStream(DynamicIncrementalHubspotStream):
     """https://developers.hubspot.com/docs/api/crm/contacts."""
 
@@ -48,6 +89,7 @@ class ContactStream(DynamicIncrementalHubspotStream):
     replication_key = "lastmodifieddate"
     replication_method = "INCREMENTAL"
     records_jsonpath = "$[results][*]"  # Or override `parse_response`.
+    is_sorted = True  # Records are sorted by replication key for resumable progress
 
     @property
     def url_base(self) -> str:
@@ -1246,6 +1288,7 @@ class CompanyStream(DynamicIncrementalHubspotStream):
     replication_key = "hs_lastmodifieddate"
     replication_method = "INCREMENTAL"
     records_jsonpath = "$[results][*]"  # Or override `parse_response`.
+    is_sorted = True  # Records are sorted by replication key for resumable progress
 
     @property
     def url_base(self) -> str:
@@ -1272,6 +1315,7 @@ class DealStream(DynamicIncrementalHubspotStream):
     replication_key = "hs_lastmodifieddate"
     replication_method = "INCREMENTAL"
     records_jsonpath = "$[results][*]"  # Or override `parse_response`.
+    is_sorted = True  # Records are sorted by replication key for resumable progress
 
     @property
     def url_base(self) -> str:
@@ -1855,6 +1899,7 @@ class EmailEventsStream(HubspotStream):
     replication_key = "created"
     replication_method = "INCREMENTAL"
     records_jsonpath = "$[events][*]"
+    is_sorted = True  # Records are sorted by replication key for resumable progress
 
     schema = PropertiesList(
         Property("id", StringType),
@@ -2053,8 +2098,12 @@ class EmailEventsStream(HubspotStream):
         if isinstance(latest_value, int) and isinstance(previous_max, int):
             return latest_value >= previous_max
 
-        # Fallback to parent implementation
-        return super().compare_replication_key_value(latest_record, previous_max)
+        # For non-integer values, fall back to string comparison
+        if latest_value is not None and previous_max is not None:
+            return str(latest_value) >= str(previous_max)
+        
+        # If either value is None, consider the latest value as newer
+        return latest_value is not None
 
     def post_process(
         self,
@@ -2088,6 +2137,14 @@ class EmailEventsStream(HubspotStream):
                         else:
                             browser[field] = ", ".join(str(v) for v in value if v)
 
+        # Ensure replication key has a valid value for resumable progress
+        if self.replication_key:
+            replication_value = extract_replication_key_value(row, self.replication_key, self.logger)
+            if replication_value is None:
+                self.logger.warning(f"Skipping email event record - no valid replication key value")
+                return None
+            row[self.replication_key] = replication_value
+
         return row
 
     def get_child_context(self, record: dict, context: Context | None) -> dict:
@@ -2112,6 +2169,7 @@ class WebEventsStream(HubspotStream):
     replication_key = "occurredAt"
     replication_method = "INCREMENTAL"
     records_jsonpath = "$[results][*]"
+    is_sorted = True  # Records are sorted by replication key for resumable progress
 
     schema = PropertiesList(
         Property("id", StringType),
@@ -2475,6 +2533,14 @@ class WebEventsStream(HubspotStream):
             row["form_title"] = self.forms_mapping.get(str(form_id))
         else:
             row["form_title"] = None
+        
+        # Ensure replication key has a valid value for resumable progress
+        if self.replication_key:
+            replication_value = extract_replication_key_value(row, self.replication_key, self.logger)
+            if replication_value is None:
+                self.logger.warning(f"Skipping web event record - no valid replication key value")
+                return None
+            row[self.replication_key] = replication_value
             
         return row
 
