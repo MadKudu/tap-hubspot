@@ -111,7 +111,7 @@ class HubspotStream(RESTStream):
             A dictionary of URL query parameters.
         """
         params: dict = {}
-        params["limit"] = 100
+        params["limit"] = 200
         if next_page_token:
             params["after"] = next_page_token
         if self.replication_key:
@@ -258,8 +258,32 @@ class DynamicIncrementalHubspotStream(DynamicHubspotStream):
         """
         if self.replication_key:
             val = None
-            if props := row.get("properties"):
-                val = props[self.replication_key]
+            props = row.get("properties")
+            if props:
+                val = props.get(self.replication_key)
+            
+            # If replication key is None/null, try to use fallback timestamp fields
+            if val is None:
+                if props:
+                    # Try alternative timestamp fields commonly used by HubSpot
+                    val = (
+                        props.get("hs_lastmodifieddate")
+                        or props.get("lastmodifieddate") 
+                        or props.get("updatedAt")
+                    )
+                
+                # If still no value, try top-level timestamp fields
+                if val is None:
+                    val = row.get("updatedAt") or row.get("createdAt")
+                
+                # If we still don't have a replication value, skip this record
+                # to avoid breaking incremental state tracking
+                if val is None:
+                    self.logger.warning(
+                        f"Skipping record {row.get('id', 'unknown')} - no valid replication key value found"
+                    )
+                    return None
+            
             row[self.replication_key] = val
         return row
 

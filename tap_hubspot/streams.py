@@ -29,6 +29,47 @@ IntegerType = th.IntegerType
 NumberType = th.NumberType
 
 
+def extract_replication_key_value(row: dict, replication_key: str, logger=None) -> str | None:
+    """Extract and validate replication key value from a record.
+    
+    Args:
+        row: The record dictionary
+        replication_key: The name of the replication key field
+        logger: Optional logger for warnings
+        
+    Returns:
+        Valid replication key value or None if not found
+    """
+    if not replication_key:
+        return None
+        
+    # Try to get the value from the replication key field
+    val = row.get(replication_key)
+    
+    # If not found or None, try properties object
+    if val is None:
+        props = row.get("properties")
+        if props:
+            val = (
+                props.get(replication_key)
+                or props.get("hs_lastmodifieddate")
+                or props.get("lastmodifieddate")
+                or props.get("updatedAt")
+            )
+    
+    # If still None, try top-level timestamp fields
+    if val is None:
+        val = row.get("updatedAt") or row.get("createdAt")
+    
+    # Log warning if no valid value found
+    if val is None and logger:
+        logger.warning(
+            f"No valid replication key value found for record {row.get('id', 'unknown')}"
+        )
+    
+    return val
+
+
 class ContactStream(DynamicIncrementalHubspotStream):
     """https://developers.hubspot.com/docs/api/crm/contacts."""
 
@@ -2088,6 +2129,14 @@ class EmailEventsStream(HubspotStream):
                         else:
                             browser[field] = ", ".join(str(v) for v in value if v)
 
+        # Ensure replication key has a valid value for resumable progress
+        if self.replication_key:
+            replication_value = extract_replication_key_value(row, self.replication_key, self.logger)
+            if replication_value is None:
+                self.logger.warning(f"Skipping email event record - no valid replication key value")
+                return None
+            row[self.replication_key] = replication_value
+
         return row
 
     def get_child_context(self, record: dict, context: Context | None) -> dict:
@@ -2475,6 +2524,14 @@ class WebEventsStream(HubspotStream):
             row["form_title"] = self.forms_mapping.get(str(form_id))
         else:
             row["form_title"] = None
+        
+        # Ensure replication key has a valid value for resumable progress
+        if self.replication_key:
+            replication_value = extract_replication_key_value(row, self.replication_key, self.logger)
+            if replication_value is None:
+                self.logger.warning(f"Skipping web event record - no valid replication key value")
+                return None
+            row[self.replication_key] = replication_value
             
         return row
 
