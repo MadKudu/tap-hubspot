@@ -111,7 +111,7 @@ class HubspotStream(RESTStream):
             A dictionary of URL query parameters.
         """
         params: dict = {}
-        params["limit"] = 100
+        params["limit"] = 200
         if next_page_token:
             params["after"] = next_page_token
         if self.replication_key:
@@ -186,6 +186,9 @@ class DynamicIncrementalHubspotStream(DynamicHubspotStream):
     def __init__(self, *args: t.Any, **kwargs: t.Any) -> None:  # noqa: D107
         super().__init__(*args, **kwargs)
 
+    # Records are sorted by replication key for resumable progress
+    is_sorted = True
+
     def _is_incremental_search(self, context: Context | None) -> bool:
         return (
             self.replication_method == REPLICATION_INCREMENTAL  # type: ignore[return-value]
@@ -257,9 +260,19 @@ class DynamicIncrementalHubspotStream(DynamicHubspotStream):
             The resulting record dict, or `None` if the record should be excluded.
         """
         if self.replication_key:
-            val = None
-            if props := row.get("properties"):
-                val = props[self.replication_key]
+            # Import helper functions here to avoid circular imports
+            from tap_hubspot.streams import extract_replication_key_value
+            
+            val = extract_replication_key_value(row, self.replication_key, self.logger)
+            
+            # If we still don't have a replication value, skip this record
+            # to avoid breaking incremental state tracking
+            if val is None:
+                self.logger.warning(
+                    f"Skipping record {row.get('id', 'unknown')} - no valid replication key value found"
+                )
+                return None
+            
             row[self.replication_key] = val
         return row
 
@@ -335,8 +348,8 @@ class DynamicIncrementalHubspotStream(DynamicHubspotStream):
                                 "direction": "ASCENDING",
                             },
                         ],
-                        # Hubspot sets a limit of most 100 per request. Default is 10
-                        "limit": 100,
+                        # Increased batch size to 200 per request for better performance. Default is 10
+                        "limit": 200,
                         "properties": list(self.hs_properties),
                     },
                 )
@@ -346,7 +359,7 @@ class DynamicIncrementalHubspotStream(DynamicHubspotStream):
                 # meet all incremental conditions
                 body.update(
                     {
-                        "limit": 100,
+                        "limit": 200,
                         "properties": list(self.hs_properties)
                         if hasattr(self, "hs_properties") and self.hs_properties
                         else [],

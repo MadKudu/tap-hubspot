@@ -29,6 +29,109 @@ IntegerType = th.IntegerType
 NumberType = th.NumberType
 
 
+def extract_replication_key_value(row: dict, replication_key: str, logger=None) -> str | None:
+    """Extract and validate replication key value from a record.
+    
+    Args:
+        row: The record dictionary
+        replication_key: The name of the replication key field
+        logger: Optional logger for warnings
+        
+    Returns:
+        Valid replication key value or None if not found
+    """
+    if not replication_key:
+        return None
+        
+    # Try to get the value from the replication key field
+    val = row.get(replication_key)
+    
+    # If not found or None, try properties object
+    if val is None:
+        props = row.get("properties")
+        if props:
+            val = (
+                props.get(replication_key)
+                or props.get("hs_lastmodifieddate")
+                or props.get("lastmodifieddate")
+                or props.get("updatedAt")
+            )
+    
+    # If still None, try top-level timestamp fields
+    if val is None:
+        val = row.get("updatedAt") or row.get("createdAt")
+    
+    # Normalize timestamp format to ensure consistent comparison
+    if val is not None:
+        val = _normalize_timestamp(val)
+    
+    # Log warning if no valid value found
+    if val is None and logger:
+        logger.warning(
+            f"No valid replication key value found for record {row.get('id', 'unknown')}"
+        )
+    
+    return val
+
+
+def _normalize_timestamp(timestamp_value) -> str:
+    """Normalize timestamp to consistent ISO format with milliseconds.
+    
+    Args:
+        timestamp_value: Timestamp value (string, int, or other)
+        
+    Returns:
+        Normalized timestamp string in ISO format with milliseconds
+    """
+    import datetime
+    
+    if isinstance(timestamp_value, int):
+        # Convert millisecond timestamp to datetime
+        dt = datetime.datetime.fromtimestamp(timestamp_value / 1000, tz=datetime.timezone.utc)
+        return dt.isoformat().replace('+00:00', 'Z')
+    
+    if isinstance(timestamp_value, str):
+        try:
+            # Parse the timestamp string and normalize format
+            if timestamp_value.endswith('Z'):
+                # Remove Z and parse as UTC
+                timestamp_str = timestamp_value[:-1]
+                dt = datetime.datetime.fromisoformat(timestamp_str).replace(tzinfo=datetime.timezone.utc)
+            else:
+                # Parse with timezone info
+                dt = datetime.datetime.fromisoformat(timestamp_value.replace('Z', '+00:00'))
+            
+            # Ensure we have microseconds for consistent formatting
+            if dt.microsecond == 0:
+                dt = dt.replace(microsecond=0)
+            
+            # Format consistently with 3 decimal places (milliseconds)
+            iso_str = dt.isoformat()
+            if '.' not in iso_str:
+                # Add .000 if no microseconds
+                iso_str = iso_str.replace('+00:00', '.000+00:00')
+            else:
+                # Truncate to 3 decimal places (milliseconds)
+                parts = iso_str.split('.')
+                if len(parts) == 2:
+                    decimal_part = parts[1]
+                    if '+' in decimal_part:
+                        microseconds, tz = decimal_part.split('+')
+                        microseconds = microseconds[:3].ljust(3, '0')  # Ensure 3 digits
+                        iso_str = f"{parts[0]}.{microseconds}+{tz}"
+                    else:
+                        microseconds = decimal_part[:3].ljust(3, '0')  # Ensure 3 digits  
+                        iso_str = f"{parts[0]}.{microseconds}+00:00"
+            
+            return iso_str.replace('+00:00', 'Z')
+        except (ValueError, AttributeError):
+            # If parsing fails, return as string
+            return str(timestamp_value)
+    
+    # For other types, convert to string
+    return str(timestamp_value)
+
+
 class ContactStream(DynamicIncrementalHubspotStream):
     """https://developers.hubspot.com/docs/api/crm/contacts."""
 
@@ -48,6 +151,7 @@ class ContactStream(DynamicIncrementalHubspotStream):
     replication_key = "lastmodifieddate"
     replication_method = "INCREMENTAL"
     records_jsonpath = "$[results][*]"  # Or override `parse_response`.
+    is_sorted = True  # Records are sorted by replication key for resumable progress
 
     @property
     def url_base(self) -> str:
@@ -72,27 +176,12 @@ class ContactStream(DynamicIncrementalHubspotStream):
             return None
 
         # Ensure replication key has a valid value for state management
-        if self.replication_key and self.replication_key in row:
-            replication_value = row.get(self.replication_key)
-            # If replication key is None/null, try to use updatedAt as fallback
+        if self.replication_key:
+            replication_value = extract_replication_key_value(row, self.replication_key, self.logger)
             if replication_value is None:
-                if props := row.get("properties"):
-                    # Try alternative timestamp fields
-                    replication_value = (
-                        props.get("lastmodifieddate")
-                        or props.get("hs_lastmodifieddate")
-                        or row.get("updatedAt")
-                    )
-                    if replication_value:
-                        row[self.replication_key] = replication_value
-                    else:
-                        # If still no replication value found, use createdAt or updatedAt from top level
-                        fallback_value = row.get("updatedAt") or row.get("createdAt")
-                        if fallback_value:
-                            row[self.replication_key] = fallback_value
-                        else:
-                            # As last resort, skip the record to avoid None replication key
-                            return None
+                # As last resort, skip the record to avoid None replication key
+                return None
+            row[self.replication_key] = replication_value
 
         return row
 
@@ -1246,6 +1335,7 @@ class CompanyStream(DynamicIncrementalHubspotStream):
     replication_key = "hs_lastmodifieddate"
     replication_method = "INCREMENTAL"
     records_jsonpath = "$[results][*]"  # Or override `parse_response`.
+    is_sorted = True  # Records are sorted by replication key for resumable progress
 
     @property
     def url_base(self) -> str:
@@ -1272,6 +1362,7 @@ class DealStream(DynamicIncrementalHubspotStream):
     replication_key = "hs_lastmodifieddate"
     replication_method = "INCREMENTAL"
     records_jsonpath = "$[results][*]"  # Or override `parse_response`.
+    is_sorted = True  # Records are sorted by replication key for resumable progress
 
     @property
     def url_base(self) -> str:
@@ -1855,6 +1946,7 @@ class EmailEventsStream(HubspotStream):
     replication_key = "created"
     replication_method = "INCREMENTAL"
     records_jsonpath = "$[events][*]"
+    is_sorted = True  # Records are sorted by replication key for resumable progress
 
     schema = PropertiesList(
         Property("id", StringType),
@@ -2053,8 +2145,12 @@ class EmailEventsStream(HubspotStream):
         if isinstance(latest_value, int) and isinstance(previous_max, int):
             return latest_value >= previous_max
 
-        # Fallback to parent implementation
-        return super().compare_replication_key_value(latest_record, previous_max)
+        # For non-integer values, fall back to string comparison
+        if latest_value is not None and previous_max is not None:
+            return str(latest_value) >= str(previous_max)
+        
+        # If either value is None, consider the latest value as newer
+        return latest_value is not None
 
     def post_process(
         self,
@@ -2088,6 +2184,14 @@ class EmailEventsStream(HubspotStream):
                         else:
                             browser[field] = ", ".join(str(v) for v in value if v)
 
+        # Ensure replication key has a valid value for resumable progress
+        if self.replication_key:
+            replication_value = extract_replication_key_value(row, self.replication_key, self.logger)
+            if replication_value is None:
+                self.logger.warning(f"Skipping email event record - no valid replication key value")
+                return None
+            row[self.replication_key] = replication_value
+
         return row
 
     def get_child_context(self, record: dict, context: Context | None) -> dict:
@@ -2112,6 +2216,7 @@ class WebEventsStream(HubspotStream):
     replication_key = "occurredAt"
     replication_method = "INCREMENTAL"
     records_jsonpath = "$[results][*]"
+    is_sorted = True  # Records are sorted by replication key for resumable progress
 
     schema = PropertiesList(
         Property("id", StringType),
@@ -2475,6 +2580,14 @@ class WebEventsStream(HubspotStream):
             row["form_title"] = self.forms_mapping.get(str(form_id))
         else:
             row["form_title"] = None
+        
+        # Ensure replication key has a valid value for resumable progress
+        if self.replication_key:
+            replication_value = extract_replication_key_value(row, self.replication_key, self.logger)
+            if replication_value is None:
+                self.logger.warning(f"Skipping web event record - no valid replication key value")
+                return None
+            row[self.replication_key] = replication_value
             
         return row
 
