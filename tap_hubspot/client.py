@@ -437,17 +437,9 @@ class DynamicIncrementalHubspotStream(DynamicHubspotStream):
                 }
                 
                 # Add sort for resumability - prefer replication key if available, otherwise sort by id
-                if self.replication_key:
-                    search_config["sorts"] = [
+                search_config["sorts"] = [
                         {
                             "propertyName": self.replication_key,
-                            "direction": "ASCENDING",
-                        }
-                    ]
-                else:
-                    search_config["sorts"] = [
-                        {
-                            "propertyName": "id",
                             "direction": "ASCENDING",
                         }
                     ]
