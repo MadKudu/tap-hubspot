@@ -267,6 +267,22 @@ class DynamicIncrementalHubspotStream(DynamicHubspotStream):
             row[self.replication_key] = val
         return row
 
+    # def _clear_incremented_timestamps(self, context: Context | None = None) -> None:
+    #     """Clear stored incremented timestamps for clean state between sync runs."""
+    #     if context:
+    #         context_key = str(context)
+    #         if context_key in self._incremented_ts:
+    #             del self._incremented_ts[context_key]
+
+    #     else:
+    #         # Clear all stored timestamps
+    #         self._incremented_ts.clear()
+
+    # def finalize_state_progress_markers(self) -> None:
+    #     """Clear incremented timestamps when finalizing state."""
+    #     super().finalize_state_progress_markers()
+    #     self._clear_incremented_timestamps()
+
     def prepare_request(  # noqa: D102
         self,
         context: Context | None,
