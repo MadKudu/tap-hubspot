@@ -182,10 +182,13 @@ class DynamicHubspotStream(HubspotStream):
 
 class DynamicIncrementalHubspotStream(DynamicHubspotStream):
     """DynamicIncrementalHubspotStream."""
+
     page_size = 200
 
     def __init__(self, *args: t.Any, **kwargs: t.Any) -> None:  # noqa: D107
         super().__init__(*args, **kwargs)
+        # Track incremented timestamp for 10k limit handling
+        self._incremented_ts: dict[str, datetime.datetime] = {}
 
     def _is_incremental_search(self, context: Context | None) -> bool:
         return (
@@ -297,22 +300,44 @@ class DynamicIncrementalHubspotStream(DynamicHubspotStream):
             if self._is_incremental_search(context):
                 # Only filter in case we have a value to filter on
                 # https://developers.hubspot.com/docs/api/crm/search
-                ts = datetime.datetime.fromisoformat(
-                    self.get_starting_replication_key_value(context),  # type: ignore[arg-type]
-                )
+
+                # Create a context key for tracking incremented timestamp
+                context_key = str(context) if context else "default"
+
+                # Use incremented timestamp if available, otherwise start with replication key value
+                if context_key in self._incremented_ts:
+                    ts = self._incremented_ts[context_key]
+                else:
+                    ts = datetime.datetime.fromisoformat(
+                        self.get_starting_replication_key_value(context),  # type: ignore[arg-type]
+                    )
+
                 if next_page_token:
                     # Hubspot wont return more than 10k records so when we hit 10k we
-                    # need to reset our epoch to most recent and not send the
+                    # need to increment our epoch timestamp to continue forward and not send the
                     # next_page_token
                     if int(next_page_token) + self.page_size >= 10000:  # noqa: PLR2004
-                        ts = strptime_to_utc(
-                            self.get_context_state(context)  # type: ignore[union-attr]
-                            .get("progress_markers")
-                            .get("replication_key_value"),
+                        # Get the current progress markers replication key value
+                        progress_markers = self.get_context_state(context).get(  # type: ignore[union-attr]
+                            "progress_markers", {}
                         )
+                        if progress_replication_value := progress_markers.get(
+                            "replication_key_value"
+                        ):
+                            # Use the most recent timestamp from progress markers and increment by 1 millisecond
+                            progress_ts = strptime_to_utc(progress_replication_value)
+                            ts = progress_ts + datetime.timedelta(milliseconds=1)
+                        else:
+                            # Fallback: increment current ts by 1 millisecond if no progress markers
+                            ts = ts + datetime.timedelta(milliseconds=1)
+
+                        # Store the incremented timestamp globally for future calls
+                        self._incremented_ts[context_key] = ts
+
                     else:
                         body["after"] = next_page_token
-                epoch_ts = str(int(ts.timestamp() * 1000))
+
+                epoch_ts = ts.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
                 body.update(
                     {
@@ -321,9 +346,7 @@ class DynamicIncrementalHubspotStream(DynamicHubspotStream):
                                 "filters": [
                                     {
                                         "propertyName": self.replication_key,
-                                        "operator": "GTE",
-                                        # Timestamps need to be in milliseconds
-                                        # https://legacydocs.hubspot.com/docs/faq/how-should-timestamps-be-formatted-for-hubspots-apis
+                                        "operator": "GT",
                                         "value": epoch_ts,
                                     },
                                 ],
