@@ -182,6 +182,7 @@ class DynamicHubspotStream(HubspotStream):
 
 class DynamicIncrementalHubspotStream(DynamicHubspotStream):
     """DynamicIncrementalHubspotStream."""
+
     page_size = 200
 
     def __init__(self, *args: t.Any, **kwargs: t.Any) -> None:  # noqa: D107
@@ -305,11 +306,40 @@ class DynamicIncrementalHubspotStream(DynamicHubspotStream):
                     # need to reset our epoch to most recent and not send the
                     # next_page_token
                     if int(next_page_token) + self.page_size >= 10000:  # noqa: PLR2004
-                        ts = strptime_to_utc(
-                            self.get_context_state(context)  # type: ignore[union-attr]
-                            .get("progress_markers")
-                            .get("replication_key_value"),
-                        )
+                        # FIX: Get progress marker but add safety check to prevent infinite loops
+                        context_state = self.get_context_state(context)  # type: ignore[union-attr]
+                        if context_state and context_state.get("progress_markers"):
+                            progress_marker_value = context_state[
+                                "progress_markers"
+                            ].get("replication_key_value")
+                            if progress_marker_value:
+                                progress_ts = strptime_to_utc(progress_marker_value)
+                                # Safety: Only use progress marker if it's newer than current timestamp
+                                # This prevents infinite loops from stale/corrupted state
+                                if progress_ts > ts:
+                                    ts = progress_ts
+                                    self.logger.info(
+                                        f"Reset to progress marker: {progress_ts}"
+                                    )
+                                else:
+                                    # Progress marker is stale, advance current timestamp slightly
+                                    ts = ts + datetime.timedelta(milliseconds=1)
+                                    self.logger.warning(
+                                        f"Progress marker ({progress_ts}) not newer than current ({ts}). "
+                                        f"Advancing by 1ms to avoid infinite loop."
+                                    )
+                            else:
+                                # No progress marker, advance current timestamp
+                                ts = ts + datetime.timedelta(milliseconds=1)
+                                self.logger.warning(
+                                    "No progress marker found. Advancing timestamp by 1ms."
+                                )
+                        else:
+                            # No state, advance current timestamp
+                            ts = ts + datetime.timedelta(milliseconds=1)
+                            self.logger.warning(
+                                "No context state found. Advancing timestamp by 1ms."
+                            )
                     else:
                         body["after"] = next_page_token
                 epoch_ts = str(int(ts.timestamp() * 1000))
