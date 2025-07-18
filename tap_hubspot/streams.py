@@ -1982,24 +1982,27 @@ class EmailEventsStream(HubspotStream):
                     )
                     params["startTimestamp"] = int(dt.timestamp() * 1000)
                 except (ValueError, AttributeError):
-                    # Fallback to config start_date if parsing fails
-                    if self.config.get("start_date"):
+                    # Fallback to effective start_date if parsing fails
+                    effective_start_date = self._tap.get_effective_start_date()
+                    if effective_start_date:
                         start_timestamp = int(
                             datetime.datetime.fromisoformat(
-                                self.config["start_date"].replace("Z", "+00:00")
+                                effective_start_date.replace("Z", "+00:00")
                             ).timestamp()
                             * 1000
                         )
                         params["startTimestamp"] = start_timestamp
-        elif self.config.get("start_date"):
-            # Only use start_date if no replication state exists (first run)
-            start_timestamp = int(
-                datetime.datetime.fromisoformat(
-                    self.config["start_date"].replace("Z", "+00:00")
-                ).timestamp()
-                * 1000
-            )
-            params["startTimestamp"] = start_timestamp
+        else:
+            # Only use effective start_date if no replication state exists (first run)
+            effective_start_date = self._tap.get_effective_start_date()
+            if effective_start_date:
+                start_timestamp = int(
+                    datetime.datetime.fromisoformat(
+                        effective_start_date.replace("Z", "+00:00")
+                    ).timestamp()
+                    * 1000
+                )
+                params["startTimestamp"] = start_timestamp
 
         if self.config.get("end_date"):
             end_timestamp = int(
@@ -2020,26 +2023,47 @@ class EmailEventsStream(HubspotStream):
         # Get the state value
         state_value = super().get_starting_replication_key_value(context)
 
-        # If we have a datetime string from state, convert it to integer timestamp
-        if isinstance(state_value, str):
-            try:
-                dt = datetime.datetime.fromisoformat(state_value.replace("Z", "+00:00"))
-                return int(dt.timestamp() * 1000)
-            except (ValueError, AttributeError):
-                pass
-
-        # If we have an integer, return as-is
-        if isinstance(state_value, int):
-            return state_value
-
-        # If we have start_date config, convert to integer timestamp
-        if self.config.get("start_date"):
-            dt = datetime.datetime.fromisoformat(
-                self.config["start_date"].replace("Z", "+00:00")
+        # Apply limit_events_month to both state and start_date
+        effective_start_date = self._tap.get_effective_start_date()
+        effective_timestamp = None
+        
+        if effective_start_date:
+            effective_dt = datetime.datetime.fromisoformat(
+                effective_start_date.replace("Z", "+00:00")
             )
-            return int(dt.timestamp() * 1000)
+            effective_timestamp = int(effective_dt.timestamp() * 1000)
 
-        return state_value
+        # If we have a state value, compare it with the effective limit
+        if state_value is not None:
+            if isinstance(state_value, str):
+                try:
+                    state_dt = datetime.datetime.fromisoformat(state_value.replace("Z", "+00:00"))
+                    state_timestamp = int(state_dt.timestamp() * 1000)
+                    
+                    # Use the more recent timestamp (later date = higher timestamp)
+                    if effective_timestamp and state_timestamp < effective_timestamp:
+                        self.logger.info(
+                            f"Limiting incremental state from {state_value} to {effective_start_date} "
+                            f"due to limit_events_month={self._tap.config.get('limit_events_month')}"
+                        )
+                        return effective_timestamp
+                    return state_timestamp
+                except (ValueError, AttributeError):
+                    pass
+
+            # If state is already an integer timestamp
+            if isinstance(state_value, int):
+                if effective_timestamp and state_value < effective_timestamp:
+                    state_dt = datetime.datetime.fromtimestamp(state_value / 1000, tz=datetime.timezone.utc)
+                    self.logger.info(
+                        f"Limiting incremental state from {state_dt.isoformat()}Z to {effective_start_date} "
+                        f"due to limit_events_month={self._tap.config.get('limit_events_month')}"
+                    )
+                    return effective_timestamp
+                return state_value
+
+        # No state value, use effective start_date
+        return effective_timestamp
 
     def compare_replication_key_value(
         self,
@@ -2328,7 +2352,7 @@ class WebEventsStream(HubspotStream):
         # Fetch forms mapping first
         self.logger.info("Fetching forms mapping for title enrichment")
         self.forms_mapping = self.get_forms_mapping()
-        
+
         event_types = self.get_event_types()
 
         if not event_types:
@@ -2433,26 +2457,47 @@ class WebEventsStream(HubspotStream):
         # Get the state value
         state_value = super().get_starting_replication_key_value(context)
 
-        # If we have a datetime string from state, convert it to integer timestamp
-        if isinstance(state_value, str):
-            try:
-                dt = datetime.datetime.fromisoformat(state_value.replace("Z", "+00:00"))
-                return int(dt.timestamp() * 1000)
-            except (ValueError, AttributeError):
-                pass
-
-        # If we have an integer, return as-is
-        if isinstance(state_value, int):
-            return state_value
-
-        # If no state value and we have start_date config, convert to integer timestamp
-        if state_value is None and self.config.get("start_date"):
-            dt = datetime.datetime.fromisoformat(
-                self.config["start_date"].replace("Z", "+00:00")
+        # Apply limit_events_month to both state and start_date
+        effective_start_date = self._tap.get_effective_start_date()
+        effective_timestamp = None
+        
+        if effective_start_date:
+            effective_dt = datetime.datetime.fromisoformat(
+                effective_start_date.replace("Z", "+00:00")
             )
-            return int(dt.timestamp() * 1000)
+            effective_timestamp = int(effective_dt.timestamp() * 1000)
 
-        return state_value
+        # If we have a state value, compare it with the effective limit
+        if state_value is not None:
+            if isinstance(state_value, str):
+                try:
+                    state_dt = datetime.datetime.fromisoformat(state_value.replace("Z", "+00:00"))
+                    state_timestamp = int(state_dt.timestamp() * 1000)
+                    
+                    # Use the more recent timestamp (later date = higher timestamp)
+                    if effective_timestamp and state_timestamp < effective_timestamp:
+                        self.logger.info(
+                            f"Limiting incremental state from {state_value} to {effective_start_date} "
+                            f"due to limit_events_month={self._tap.config.get('limit_events_month')}"
+                        )
+                        return effective_timestamp
+                    return state_timestamp
+                except (ValueError, AttributeError):
+                    pass
+
+            # If state is already an integer timestamp
+            if isinstance(state_value, int):
+                if effective_timestamp and state_value < effective_timestamp:
+                    state_dt = datetime.datetime.fromtimestamp(state_value / 1000, tz=datetime.timezone.utc)
+                    self.logger.info(
+                        f"Limiting incremental state from {state_dt.isoformat()}Z to {effective_start_date} "
+                        f"due to limit_events_month={self._tap.config.get('limit_events_month')}"
+                    )
+                    return effective_timestamp
+                return state_value
+
+        # No state value, use effective start_date
+        return effective_timestamp
 
     def post_process(
         self,
@@ -2465,16 +2510,15 @@ class WebEventsStream(HubspotStream):
             row["occurredAt"] = datetime.datetime.fromtimestamp(
                 row["occurredAt"] / 1000, tz=datetime.timezone.utc
             ).isoformat()
-        
+
         # Add form title based on hs_form_id mapping
         form_id = None
         if "properties" in row and isinstance(row["properties"], dict):
             form_id = row["properties"].get("hs_form_id")
-        
-        if form_id and hasattr(self, 'forms_mapping'):
+
+        if form_id and hasattr(self, "forms_mapping"):
             row["form_title"] = self.forms_mapping.get(str(form_id))
         else:
             row["form_title"] = None
-            
-        return row
 
+        return row

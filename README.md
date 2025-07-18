@@ -24,6 +24,7 @@ Built with the [Meltano Singer SDK](https://sdk.meltano.com).
 | refresh_token       | False    | None    | The OAuth app refresh token. |
 | start_date          | False    | None    | Earliest record date to sync |
 | end_date            | False    | None    | Latest record date to sync |
+| limit_events_month  | False    | None    | Hard limit the start date to last X months from today (no limit if not set) |
 | stream_maps         | False    | None    | Config object for stream maps capability. For more information check out [Stream Maps](https://sdk.meltano.com/en/latest/stream_maps.html). |
 | stream_map_config   | False    | None    | User-defined config values to be used within map expressions. |
 | flattening_enabled  | False    | None    | 'True' to enable schema flattening and automatically expand nested properties. |
@@ -31,6 +32,45 @@ Built with the [Meltano Singer SDK](https://sdk.meltano.com).
 | batch_config        | False    | None    |             |
 
 A full list of supported settings and capabilities is available by running: `tap-hubspot --about`
+
+## Date Limiting
+
+The `limit_events_month` parameter provides a way to hard limit how far back the tap will sync data, regardless of the configured `start_date`. This is useful for:
+
+- Preventing excessive API usage when syncing large historical datasets
+- Implementing rolling data windows for incremental syncs
+- Controlling resource usage by limiting data volume
+
+### How it works:
+
+- When `limit_events_month` is set to a positive integer (e.g., `6`), the tap calculates a limit date by going back `31 * N` days from today
+- The effective start date becomes the more recent of:
+  - The configured `start_date` OR existing incremental state
+  - The calculated limit date (31 * N days ago from today)
+- This applies to both **initial runs** and **incremental syncs with existing state**
+- If `limit_events_month` is not set or is `null`, the original `start_date` or incremental state is used without any limitation
+- When limiting is applied, a log message will show the date change
+
+### Examples:
+
+**Initial Run:**
+```yaml
+# Configuration
+start_date: "2020-01-01T00:00:00Z"
+limit_events_month: 6
+
+# Result: If today is 2025-07-18, the effective start date becomes 2024-01-20T00:00:00Z
+# (186 days ago = 31 * 6), ignoring the older start_date of 2020-01-01
+```
+
+**Incremental Run with Old State:**
+```yaml
+# Configuration (incremental state exists from 2020-01-01)
+limit_events_month: 12
+
+# Log: "Limiting incremental state from 2020-01-01T00:00:00Z to 2023-07-21T00:00:00Z due to limit_events_month=12"
+# Result: Uses 2023-07-21 instead of the old 2020-01-01 state
+```
 
 ## Elastic License 2.0
 
