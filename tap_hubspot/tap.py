@@ -1,6 +1,7 @@
 """tap-hubspot tap class."""
 
 from __future__ import annotations
+import datetime
 
 from singer_sdk import Tap
 from singer_sdk import typing as th  # JSON schema typing helpers
@@ -49,6 +50,12 @@ class TapHubspot(Tap):
             description="Latest record date to sync",
         ),
         th.Property(
+            "limit_events_month",
+            th.IntegerType,
+            required=False,
+            description="Hard limit the start date to last X months from today (no limit if not set)",
+        ),
+        th.Property(
             "enabled_hubspot_pull_web_events",
             th.BooleanType,
             default=False,
@@ -61,6 +68,43 @@ class TapHubspot(Tap):
             description="Enable syncing of all web events globally (comprehensive, but may be slower)",
         ),
     ).to_dict()
+
+    def get_effective_start_date(self) -> str | None:
+        """Calculate the effective start date considering the limit_events_month parameter.
+        
+        Returns:
+            The effective start date as ISO string, or None if no start_date is configured.
+        """
+        start_date = self.config.get("start_date")
+        limit_events_month = self.config.get("limit_events_month")
+        
+        if not start_date:
+            return None
+            
+        # If no limit is set, return the original start_date
+        if not limit_events_month:
+            return start_date
+            
+        # Calculate the limit date (X months ago from today using 31-day approximation)
+        today = datetime.datetime.now(datetime.timezone.utc)
+        limit_date = today - datetime.timedelta(days=31 * limit_events_month)
+        
+        limit_date_str = limit_date.strftime("%Y-%m-%dT%H:%M:%SZ")
+        
+        # Use the more recent date between start_date and limit_date
+        start_dt = datetime.datetime.fromisoformat(start_date.replace("Z", "+00:00"))
+        limit_dt = datetime.datetime.fromisoformat(limit_date_str.replace("Z", "+00:00"))
+        
+        if start_dt > limit_dt:
+            # Original start_date is more recent, use it
+            return start_date
+        else:
+            # Limit date is more recent, use the limit
+            self.logger.info(
+                f"Limiting start_date from {start_date} to {limit_date_str} "
+                f"due to limit_events_month={limit_events_month}"
+            )
+            return limit_date_str
 
     def discover_streams(self) -> list[streams.HubspotStream]:
         """Return a list of discovered streams.
